@@ -18,10 +18,11 @@ my $builder = Module::Build->new(
     requires => {
       perl                        => '5.10.0',
       'Carp'                      => undef,
+      'HTML::Entities'            => undef,
       'Moose'                     => undef,
       'MooseX::StrictConstructor' => undef,
-      'MsOffice::Word::Surgeon'   => undef,
-      'Template'                  => undef,
+      'MsOffice::Word::Surgeon'   => 1.05,
+      'Template::AutoFilter'      => undef,
       'namespace::clean'          => undef,
     },
     add_to_cleanup     => [ 'MsOffice-Word-Template-*' ],
