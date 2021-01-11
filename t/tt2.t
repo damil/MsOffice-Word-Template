@@ -1,13 +1,14 @@
 use strict;
 use warnings;
-use MsOffice::Word::Surgeon;
 use MsOffice::Word::Template;
 use Test::More;
 
 
-(my $dir = $0) =~ s[tst_template.t$][];
+my $do_save_results = $ARGV[0] && $ARGV[0] eq 'save';
+
+(my $dir = $0) =~ s[tt2.t$][];
 $dir ||= ".";
-my $template_file = "$dir/etc/tst_template.docx";
+my $template_file = "$dir/etc/tt2_template.docx";
 
 diag( "Testing MsOffice::Word::Template $MsOffice::Word::Template::VERSION, Perl $], $^X" );
 
@@ -26,8 +27,7 @@ my $xml = $new_doc->contents;
 
 like $xml, qr[Hello, </w:t></w:r><w:r><w:t>FOFOLLE</w:t></w:r>], "Foo";
 like $xml, qr[toto</w:t></w:r></w:p></w:tc>], "toto in first table row";
-$new_doc->save_as("tt2_result.docx") if $ARGV[0] eq 'save';
-
+$new_doc->save_as("tt2_result.docx") if $do_save_results;
 
 # 2nd invocation to test potential caching problems
 my %data2 = (
@@ -44,7 +44,7 @@ $xml = $new_doc->contents;
 like $xml, qr[Hello, </w:t></w:r><w:r><w:t>FOLLONICA</w:t></w:r>], "Foo";
 like $xml, qr[tata</w:t></w:r></w:p></w:tc>], "tata in first table row";
 
-$new_doc->save_as("tt2_result2.docx")  if $ARGV[0] eq 'save';
+$new_doc->save_as("tt2_result2.docx")  if $do_save_results;
 
 
 done_testing;

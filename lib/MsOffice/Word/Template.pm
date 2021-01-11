@@ -214,7 +214,7 @@ __END__
 
 =head1 NAME
 
-MsOffice::Word::Template - use Perl templating systems on Microsoft Word documents
+MsOffice::Word::Template - generate Microsoft Word documents from Word templates
 
 =head1 SYNOPSIS
 
@@ -339,18 +339,17 @@ A template is just a regular Word document, in which the highlighted
 fragments represent templating directives.
 
 The data directives, i.e. the "holes" to be filled must be highlighted
-in B<yellow>. Fill these zones with the names of variables to fill the
-holes. If the template engine supports it, names of variables can be paths into a complex datastructure,
-with dots separating the levels, like C<foo.3.bar.-1> -- 
-for example with the Template Toolkit, see
-L<Template::Manual::Directive/GET> and
-L<Template::Manual::Variables>. 
+in B<yellow>. Such zones must contain the names of variables to fill the
+holes. If the template engine supports it, names of variables can be paths
+into a complex datastructure, with dots separating the levels, like
+C<foo.3.bar.-1> -- see L<Template::Manual::Directive/GET> and
+L<Template::Manual::Variables> if you are using the Template Toolkit.
 
 Control directives like C<IF>, C<FOREACH>, etc. must be highlighted in
 B<green>. When seeing a green zone, the system will remove markup for
 the surrounding XML nodes (text, run and paragraph nodes). If this
 occurs within a table, the markup for the current row is also
-removed. This mechanis ensures that the final result will contain
+removed. This mechanism ensures that the final result will not contain
 empty paragraphs or empty rows at places corresponding to control directives.
 
 In consequence of this distinction between yellow and green
