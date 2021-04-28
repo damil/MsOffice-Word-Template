@@ -369,7 +369,7 @@ angle brackets in XML markup do not get translated into HTML entities.
 This module invokes a backend I<templating engine> for interpreting the
 template directives. In order to use an engine different from the default
 L<Template Toolkit|Template>, you must supply the following parameters
-to the N</new> method :
+to the L</new> method :
 
 =over
 
