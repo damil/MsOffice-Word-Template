@@ -26,7 +26,10 @@ my $new_doc = $template->process(\%data);
 my $xml = $new_doc->contents;
 
 like $xml, qr[Hello, </w:t></w:r><w:r><w:t>FOFOLLE</w:t></w:r>], "Foo";
-like $xml, qr[toto</w:t></w:r></w:p></w:tc>], "toto in first table row";
+like $xml, qr[toto</w:t></w:r></w:p></w:tc>],                    "toto in first table row";
+like $xml, qr[<w:bookmarkStart w:id="101" w:name="bkm1"/>],      "bookmark";
+like $xml, qr[<w:hyperlink w:anchor="bkm1">],                    "hyperlink";
+
 $new_doc->save_as("tt2_result.docx") if $do_save_results;
 
 # 2nd invocation to test potential caching problems

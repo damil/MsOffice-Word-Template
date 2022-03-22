@@ -73,18 +73,23 @@ sub build_template_text {
   # start and end character sequences for a template fragment
   my ($rx_start, $rx_end) = map quotemeta, $self->start_tag, $self->end_tag;
 
-  # regex for matching paragraphs that contain directives to be treated outside the text flow.
+  # regex for matching directives to be treated outside the text flow.
   # Such directives are identified through a specific XML comment -- this comment is
   # inserted by method "template_fragment_for_run()" below.
-  my $regex_paragraph = qr{
-    <w:p               [^>]*>                  # start paragraph node
-      (?: <w:pPr> .*? </w:pPr>     (*SKIP) )?  # optional paragraph properties
+  my $regex_outside_text_flow = qr{
       <w:r             [^>]*>                  # start run node
         <w:t           [^>]*>                  # start text node
           ($rx_start .*? $rx_end)  (*SKIP)     # template directive
           <!--OUTSIDE_TEXT_FLOW-->             # specific XML comment
         </w:t>                                 # close text node
       </w:r>                                   # close run node
+   }sx;
+
+  # regex for matching paragraphs that contain such directives
+  my $regex_paragraph = qr{
+    <w:p               [^>]*>                  # start paragraph node
+      (?: <w:pPr> .*? </w:pPr>     (*SKIP) )?  # optional paragraph properties
+      $regex_outside_text_flow
     </w:p>                                     # close paragraph node
    }sx;
 
@@ -108,11 +113,19 @@ sub build_template_text {
   my @template_fragments = map {$self->template_fragment_for_run($_)}  @{$self->surgeon->runs};
   my $template_text      = join "", @template_fragments;
 
-  # remove markup for rows around directives
+  # remove markup for table rows around directives
   $template_text =~ s/$regex_row/$1/g;
 
-  # remove markup for pagraphs around directives
+  # remove markup for paragraphs around directives
   $template_text =~ s/$regex_paragraph/$1/g;
+
+  # remove markup for remaining directives
+  $template_text =~ s/$regex_outside_text_flow/$1/g;
+
+  # NOTE : in the global substitutions above, the order is important,
+  # because the XML fragments to be matched are included in each
+  # other. So we first try to match the biggest fragment, then the
+  # medium, then the smallest.
 
   return $template_text;
 }
@@ -126,8 +139,6 @@ sub template_fragment_for_run { # given an instance of Surgeon::Run, build a tem
   my $control_color = $self->control_color;
 
   # if this run is highlighted in yellow or green, it must be translated into a template directive
-  # NOTE:  the code below has much in common with Surgeon::Run::as_xml() -- maybe
-  # part of it could be shared in a future version
   if ($props =~ s{<w:highlight w:val="($data_color|$control_color)"/>}{}) {
     my $color       = $1;
     my $xml         = $run->xml_before;
@@ -138,8 +149,8 @@ sub template_fragment_for_run { # given an instance of Surgeon::Run, build a tem
       $xml .= "<w:rPr>" . $props . "</w:rPr>" if $props;              # optional run properties
       $xml .= "<w:t>";                                                # opening XML tag for text node
       $xml .= $self->start_tag;                                       # start a template directive
-      foreach my $inner_text (@$inner_texts) {
-        my $txt = decode_entities($inner_text->literal_text);
+      foreach my $inner_text (@$inner_texts) {                        # loop over text nodes
+        my $txt = decode_entities($inner_text->literal_text);         # just take inner literal text
         $xml .= $txt . "\n";
         # NOTE : adding "\n" because the template parser may need them for identifying end of comments
       }
@@ -191,10 +202,43 @@ sub TT2_engine {
 
   require Template::AutoFilter; # a subclass of Template that adds automatic html filtering
 
+
+  # precompiled wrapper blocks for bookmarks and for internal links to bookmarks
+  my %TT2_args = @{$self->engine_args};
+  $TT2_args{BLOCKS}{bookmark} //= sub {
+    my $context     = shift;
+    my $stash       = $context->stash;
+
+    # assemble xml markup
+    my $bookmark_id = ($stash->get('global.bookmark_id') || 100) + 1;
+    my $name        = $stash->get('name') || 'anonymous_bookmark';
+    my $xml         = qq{<w:bookmarkStart w:id="$bookmark_id" w:name="$name"/>}
+                    . $stash->get('content') # content of the wrapper
+                    . qq{<w:bookmarkEnd w:id="$bookmark_id"/>};
+
+    # next bookmark will need a fresh id
+    $stash->set('global.bookmark_id', $bookmark_id);
+
+    return $xml;
+  };
+  $TT2_args{BLOCKS}{link_to_bookmark} //= sub {
+    my $context = shift;
+    my $stash   = $context->stash;
+
+    # assemble xml markup
+    my $name = $stash->get('name') || 'anonymous_bookmark';
+    my $xml = qq{<w:hyperlink w:anchor="$name">}
+            . $stash->get('content')
+            . qq{</w:hyperlink>};
+
+    return $xml;
+  };
+
+
   # at the first invocation, create a TT2 compiled template and store it in the stash.
   # Further invocations just reuse the TT2 object in stash.
   my $stash                     = $self->{engine_stash} //= {};
-  $stash->{TT2}               //= Template::AutoFilter->new(@{$self->engine_args});
+  $stash->{TT2}               //= Template::AutoFilter->new(\%TT2_args);
   $stash->{compiled_template} //= $stash->{TT2}->template(\$self->{template_text});
 
   # generate new XML by invoking the template on $vars
@@ -440,6 +484,35 @@ explicitly add an C<html> filter at each directive :
 
 but thanks to the L<Template::AutoFilter>
 module, this is performed automatically.
+
+
+=head1 TEMPLATE AUTHORING WITH TEMPLATE TOOLKIT
+
+This chapter just gives a few hints for authoring Word templates with the
+Template Toolkit.
+
+The examples below use [[segments in double square brackets]] to indicate
+segments that should be highlighted in B<green> within the Word template.
+
+
+=head2 Bookmarks
+
+The Template Toolkit is instantiated with a predefined wrapper for generating
+Word bookmarks. Within the Word Template, write something like
+
+   Here is a paragraph with [[WRAPPER bookmark name="my_bookmark"]]bookmarked text[[END]].
+
+Beware that Word is quite restrictive on bookmark names : they cannot exceed 40 Unicode
+characters, must not start with a digit and must not contain any kind of white space or
+punctuation.
+
+=head2 Internal hyperlinks
+
+Similarly, there is a predefined wrapper for generating
+hyperlinks to bookmarks. Within the Word Template, write something like
+
+   Click [[WRAPPER link_to_bookmark name="my_bookmark"]]here[[END]].
+
 
 =head1 AUTHOR
 
