@@ -27,6 +27,9 @@ has 'template_text' => (is => 'bare', isa => 'Str',                     init_arg
 has 'engine_stash'  => (is => 'bare', isa => 'HashRef',                 init_arg => undef,
                                                                         clearer  => 'clear_stash');
 
+my $XML_COMMENT_FOR_MARKING_DIRECTIVES = '<!--TEMPLATE_DIRECTIVE_ABOVE-->';
+
+
 
 #======================================================================
 # BUILDING THE TEMPLATE
@@ -73,21 +76,29 @@ sub build_template_text {
   # start and end character sequences for a template fragment
   my ($rx_start, $rx_end) = map quotemeta, $self->start_tag, $self->end_tag;
 
-  # regex for matching directives to be treated outside the text flow.
+  # Regexes for extracting template directives within the XML.
   # Such directives are identified through a specific XML comment -- this comment is
   # inserted by method "template_fragment_for_run()" below.
+  # The (*SKIP) instructions are used to avoid backtracking after a
+  # closing tag for the subexpression has been found. Otherwise the
+  # .*? inside could possibly match across boundaries of the current
+  # XML node, we don't want that.
+
+  # regex for matching directives to be treated outside the text flow.
   my $regex_outside_text_flow = qr{
-      <w:r             [^>]*>                  # start run node
-        <w:t           [^>]*>                  # start text node
+      <w:r\b           [^>]*>                  # start run node
+        (?: <w:rPr> .*? </w:rPr>   (*SKIP) )?  # optional run properties
+        <w:t\b         [^>]*>                  # start text node
           ($rx_start .*? $rx_end)  (*SKIP)     # template directive
-          <!--OUTSIDE_TEXT_FLOW-->             # specific XML comment
+          $XML_COMMENT_FOR_MARKING_DIRECTIVES  # specific XML comment
+
         </w:t>                                 # close text node
       </w:r>                                   # close run node
    }sx;
 
   # regex for matching paragraphs that contain such directives
   my $regex_paragraph = qr{
-    <w:p               [^>]*>                  # start paragraph node
+    <w:p\b             [^>]*>                  # start paragraph node
       (?: <w:pPr> .*? </w:pPr>     (*SKIP) )?  # optional paragraph properties
       $regex_outside_text_flow
     </w:p>                                     # close paragraph node
@@ -95,8 +106,8 @@ sub build_template_text {
 
   # regex for matching table rows that contain such paragraphs.
   my $regex_row = qr{
-    <w:tr              [^>]*>                  # start row node
-      <w:tc            [^>]*>                  # start cell node
+    <w:tr\b            [^>]*>                  # start row node
+      <w:tc\b          [^>]*>                  # start cell node
          (?:<w:tcPr> .*? </w:tcPr> (*SKIP) )?  # cell properties
          $regex_paragraph                      # paragraph in cell
       </w:tc>                                  # close cell node
@@ -104,28 +115,14 @@ sub build_template_text {
     </w:tr>                                    # close row node
    }sx;
 
-  # NOTE : the (*SKIP) instructions in regexes above are used to avoid backtracking
-  # after a closing tag for the subexpression has been found. Otherwise the .*? inside
-  # could possibly match across boundaries of the current XML node, we don't want that.
-
   # assemble template fragments from all runs in the document into a global template text
   $self->surgeon->cleanup_XML;
   my @template_fragments = map {$self->template_fragment_for_run($_)}  @{$self->surgeon->runs};
   my $template_text      = join "", @template_fragments;
 
-  # remove markup for table rows around directives
-  $template_text =~ s/$regex_row/$1/g;
-
-  # remove markup for paragraphs around directives
-  $template_text =~ s/$regex_paragraph/$1/g;
-
-  # remove markup for remaining directives
-  $template_text =~ s/$regex_outside_text_flow/$1/g;
-
-  # NOTE : in the global substitutions above, the order is important,
-  # because the XML fragments to be matched are included in each
-  # other. So we first try to match the biggest fragment, then the
-  # medium, then the smallest.
+  # remove markup around directives, successively for table rows, for paragraphs, and finally
+  # for remaining directives embedded within text runs.
+  $template_text =~ s/$_/$1/g for $regex_row, $regex_paragraph, $regex_outside_text_flow;
 
   return $template_text;
 }
@@ -156,7 +153,8 @@ sub template_fragment_for_run { # given an instance of Surgeon::Run, build a tem
       }
 
       $xml .= $self->end_tag;                                         # end of template directive
-      $xml .= "<!--OUTSIDE_TEXT_FLOW-->" if $color eq $control_color; # XML comment for marking
+      $xml .= $XML_COMMENT_FOR_MARKING_DIRECTIVES
+                                         if $color eq $control_color; # XML comment for marking
       $xml .= "</w:t>";                                               # closing XML tag for text node
       $xml .= "</w:r>";                                               # closing XML tag for run node
     }
@@ -196,6 +194,11 @@ sub process {
 # DEFAULT ENGINE : TEMPLATE TOOLKIT, a.k.a. TT2
 #======================================================================
 
+# arbitrary value for the first bookmark id. 100 should most often be above other
+# bookmarks generated by Word itself. TODO : would be better to find the highest
+# id number really used in the template
+my $first_bookmark_id = 100;
+
 
 sub TT2_engine {
   my ($self, $vars) = @_;
@@ -210,14 +213,15 @@ sub TT2_engine {
     my $stash       = $context->stash;
 
     # assemble xml markup
-    my $bookmark_id = ($stash->get('global.bookmark_id') || 100) + 1;
-    my $name        = $stash->get('name') || 'anonymous_bookmark';
+    my $bookmark_id = $stash->get('global.bookmark_id') || $first_bookmark_id;
+    my $name        = fix_bookmark_name($stash->get('name') || 'anonymous_bookmark');
+
     my $xml         = qq{<w:bookmarkStart w:id="$bookmark_id" w:name="$name"/>}
                     . $stash->get('content') # content of the wrapper
                     . qq{<w:bookmarkEnd w:id="$bookmark_id"/>};
 
     # next bookmark will need a fresh id
-    $stash->set('global.bookmark_id', $bookmark_id);
+    $stash->set('global.bookmark_id', $bookmark_id+1);
 
     return $xml;
   };
@@ -226,10 +230,10 @@ sub TT2_engine {
     my $stash   = $context->stash;
 
     # assemble xml markup
-    my $name = $stash->get('name') || 'anonymous_bookmark';
-    my $xml = qq{<w:hyperlink w:anchor="$name">}
-            . $stash->get('content')
-            . qq{</w:hyperlink>};
+    my $name = fix_bookmark_name($stash->get('name') || 'anonymous_bookmark');
+    my $xml  = qq{<w:hyperlink w:anchor="$name">}
+             . $stash->get('content')
+             . qq{</w:hyperlink>};
 
     return $xml;
   };
@@ -248,6 +252,22 @@ sub TT2_engine {
 }
 
 
+#======================================================================
+# UTILITY ROUTINES (not methods)
+#======================================================================
+
+
+sub fix_bookmark_name {
+  my $name = shift;
+
+  # see https://stackoverflow.com/questions/852922/what-are-the-limitations-for-bookmark-names-in-microsoft-word
+
+  $name =~ s/[^\w_]+/_/g;                              # only digits, letters or underscores
+  $name =~ s/^(\d)/_$1/;                               # cannot start with a digit
+  $name = substr($name, 0, 40) if length($name) > 40;  # max 40 characters long
+
+  return $name;
+}
 
 
 1;
@@ -502,9 +522,9 @@ Word bookmarks. Within the Word Template, write something like
 
    Here is a paragraph with [[WRAPPER bookmark name="my_bookmark"]]bookmarked text[[END]].
 
-Beware that Word is quite restrictive on bookmark names : they cannot exceed 40 Unicode
-characters, must not start with a digit and must not contain any kind of white space or
-punctuation.
+The C<name> argument is automatically truncated to 40 characters, and whitespaces are
+replaces by underscores (because these are the limitations imposed by Word for bookmark
+names).
 
 =head2 Internal hyperlinks
 
