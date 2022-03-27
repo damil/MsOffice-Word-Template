@@ -91,12 +91,11 @@ sub build_template_text {
         <w:t\b         [^>]*>                  # start text node
           ($rx_start .*? $rx_end)  (*SKIP)     # template directive
           $XML_COMMENT_FOR_MARKING_DIRECTIVES  # specific XML comment
-
         </w:t>                                 # close text node
       </w:r>                                   # close run node
    }sx;
 
-  # regex for matching paragraphs that contain such directives
+  # regex for matching paragraphs that contain only a directive
   my $regex_paragraph = qr{
     <w:p\b             [^>]*>                  # start paragraph node
       (?: <w:pPr> .*? </w:pPr>     (*SKIP) )?  # optional paragraph properties
@@ -104,14 +103,14 @@ sub build_template_text {
     </w:p>                                     # close paragraph node
    }sx;
 
-  # regex for matching table rows that contain such paragraphs.
+  # regex for matching table rows that contain only a directive in the first cell
   my $regex_row = qr{
     <w:tr\b            [^>]*>                  # start row node
       <w:tc\b          [^>]*>                  # start cell node
          (?:<w:tcPr> .*? </w:tcPr> (*SKIP) )?  # cell properties
          $regex_paragraph                      # paragraph in cell
       </w:tc>                                  # close cell node
-      (?:<w:tc> .*? </w:tc>        (*SKIP) )*  # possibly other cells on the same row
+      (?:<w:tc> .*? </w:tc>        (*SKIP) )*  # ignore other cells on the same row
     </w:tr>                                    # close row node
    }sx;
 
@@ -199,16 +198,11 @@ sub process {
 # id number really used in the template
 my $first_bookmark_id = 100;
 
+# precompiled blocks as facilities to be used within templates
+my %precompiled_blocks = (
 
-sub TT2_engine {
-  my ($self, $vars) = @_;
-
-  require Template::AutoFilter; # a subclass of Template that adds automatic html filtering
-
-
-  # precompiled wrapper blocks for bookmarks and for internal links to bookmarks
-  my %TT2_args = @{$self->engine_args};
-  $TT2_args{BLOCKS}{bookmark} //= sub {
+  # a wrapper block for inserting a Word bookmark
+  bookmark => sub {
     my $context     = shift;
     my $stash       = $context->stash;
 
@@ -224,8 +218,10 @@ sub TT2_engine {
     $stash->set('global.bookmark_id', $bookmark_id+1);
 
     return $xml;
-  };
-  $TT2_args{BLOCKS}{link_to_bookmark} //= sub {
+  },
+
+  # a wrapper block for linking to a bookmark
+  link_to_bookmark => sub {
     my $context = shift;
     my $stash   = $context->stash;
 
@@ -236,7 +232,43 @@ sub TT2_engine {
              . qq{</w:hyperlink>};
 
     return $xml;
-  };
+  },
+
+
+  field => sub {
+    my $context = shift;
+    my $stash   = $context->stash;
+    my $code    = $stash->get('code');         # field code, including possible flags
+    my $alt     = $stash->get('alt')   || "";  # initial text displayed within the field
+    my $altPr   = $stash->get('altPr') || "";  # optional run properties for the alt text
+    $altPr = "<w:rPr>$altPr</w:rPr>" if $altPr;
+
+    my $xml = qq{</w:t></w:r>}                 # close current run
+            . qq{<w:r><w:fldChar w:fldCharType="begin"/></w:r>}
+            . qq{<w:r><w:instrText xml:space="preserve"> $code </w:instrText></w:r>}
+            . qq{<w:r><w:fldChar w:fldCharType="separate"/></w:r>}
+            . qq{<w:r>$altPr<w:t>$alt</w:t></w:r>}
+            . qq{<w:r><w:fldChar w:fldCharType="end"/></w:r>}
+            . qq{<w:r><w:t>}                   # open new run
+            ;
+
+    return $xml;
+  },
+
+);
+
+
+
+
+sub TT2_engine {
+  my ($self, $vars) = @_;
+
+  require Template::AutoFilter; # a subclass of Template that adds automatic html filtering
+
+
+  # assemble args to be passed to the constructor
+  my %TT2_args = @{$self->engine_args};
+  $TT2_args{BLOCKS}{$_} //= $precompiled_blocks{$_} for keys %precompiled_blocks;
 
 
   # at the first invocation, create a TT2 compiled template and store it in the stash.
@@ -329,8 +361,8 @@ in order to avoid empty paragraphs or empty rows in the resulting document.
 =back
 
 The syntax of data and control directives depends on the backend
-templating engine.  The default engine is the L<Perl Template
-Toolkit|Template>; other engines can be specified through parameters
+templating engine.  The default engine is the L<Perl Template Toolkit|Template>;
+other engines can be specified through parameters
 to the L</new> method -- see the L</TEMPLATE ENGINE> section below.
 
 
@@ -410,9 +442,10 @@ C<foo.3.bar.-1> -- see L<Template::Manual::Directive/GET> and
 L<Template::Manual::Variables> if you are using the Template Toolkit.
 
 Control directives like C<IF>, C<FOREACH>, etc. must be highlighted in
-B<green>. When seeing a green zone, the system will remove markup for
-the surrounding XML nodes (text, run and paragraph nodes). If this
-occurs within a table, the markup for the current row is also
+B<green>. When seeing a green zone, the system will remove XML markup for
+the surrounding text and run nodes. If the directive is the only content
+of the paragraph, then the paragraph node is also removed. If this
+occurs within the first cell of a table row, the markup for that row is also
 removed. This mechanism ensures that the final result will not contain
 empty paragraphs or empty rows at places corresponding to control directives.
 
@@ -506,7 +539,7 @@ but thanks to the L<Template::AutoFilter>
 module, this is performed automatically.
 
 
-=head1 TEMPLATE AUTHORING WITH TEMPLATE TOOLKIT
+=head1 AUTHORING NOTES SPECIFIC TO THE TEMPLATE TOOLKIT
 
 This chapter just gives a few hints for authoring Word templates with the
 Template Toolkit.
@@ -532,6 +565,11 @@ Similarly, there is a predefined wrapper for generating
 hyperlinks to bookmarks. Within the Word Template, write something like
 
    Click [[WRAPPER link_to_bookmark name="my_bookmark"]]here[[END]].
+
+=head2 Word fields
+
+A predefined block named C<field> is 
+
 
 
 =head1 AUTHOR
