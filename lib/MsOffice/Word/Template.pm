@@ -3,11 +3,11 @@ use Moose;
 use MooseX::StrictConstructor;
 use Carp                           qw(croak);
 use HTML::Entities                 qw(decode_entities);
-use MsOffice::Word::Surgeon;
+use MsOffice::Word::Surgeon 1.08;
 
 use namespace::clean -except => 'meta';
 
-our $VERSION = '1.01';
+our $VERSION = '1.02';
 
 # attributes for interacting with MsWord
 has 'surgeon'       => (is => 'ro',   isa => 'MsOffice::Word::Surgeon', required => 1);
