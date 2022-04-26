@@ -13,7 +13,7 @@ our $VERSION = '1.02';
 has 'surgeon'       => (is => 'ro',   isa => 'MsOffice::Word::Surgeon', required => 1);
 has 'data_color'    => (is => 'ro',   isa => 'Str',                     default  => "yellow");
 has 'control_color' => (is => 'ro',   isa => 'Str',                     default  => "green");
-# see also BUILDARGS: the "docx" arg will be translated into "surgeon"
+# see also BUILDARGS: the constructor can also take a "docx" arg that will be translated into a "surgeon" attribute
 
 # attributes for interacting with the chosen template engine
 # Filled by default with values for the Template Toolkit (a.k.a TT2)
