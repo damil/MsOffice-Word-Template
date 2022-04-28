@@ -16,7 +16,7 @@ my $builder = Module::Build->new(
         'Test::More' => '0',
     },
     requires => {
-      perl                        => '5.10.0',
+      perl                        => '5.22.0',
       'Carp'                      => undef,
       'HTML::Entities'            => undef,
       'Moose'                     => undef,

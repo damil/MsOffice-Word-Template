@@ -1,34 +1,50 @@
 package MsOffice::Word::Template;
+use 5.022;
 use Moose;
 use MooseX::StrictConstructor;
 use Carp                           qw(croak);
 use HTML::Entities                 qw(decode_entities);
 use MsOffice::Word::Surgeon 1.08;
 
+# https://badger.developpez.com/tutoriels/dotnet/creer-fichier-word-openxml/
+
+
 use namespace::clean -except => 'meta';
 
 our $VERSION = '1.02';
 
-# attributes for interacting with MsWord
-has 'surgeon'       => (is => 'ro',   isa => 'MsOffice::Word::Surgeon', required => 1);
-has 'data_color'    => (is => 'ro',   isa => 'Str',                     default  => "yellow");
-has 'control_color' => (is => 'ro',   isa => 'Str',                     default  => "green");
-# see also BUILDARGS: the constructor can also take a "docx" arg that will be translated into a "surgeon" attribute
+#======================================================================
+# ATTRIBUTES
+#======================================================================
 
-# attributes for interacting with the chosen template engine
+# constructor attributes for interacting with MsWord
+# See also BUILDARGS: the constructor can also take a "docx" arg
+# that will be translated into a "surgeon" attribute
+has 'surgeon'            => (is => 'ro',   isa => 'MsOffice::Word::Surgeon', required => 1);
+has 'data_color'         => (is => 'ro',   isa => 'Str',                     default  => "yellow");
+has 'control_color'      => (is => 'ro',   isa => 'Str',                     default  => "green");
+has 'part_names'         => (is => 'ro',   isa => 'ArrayRef[Str]',           default  => sub {[keys shift->surgeon->parts->%*]},
+                                                                             lazy     => 1);
+
+# constructor attributes for interacting with the chosen template engine
 # Filled by default with values for the Template Toolkit (a.k.a TT2)
-has 'start_tag'     => (is => 'ro',   isa => 'Str',                     default  => "[% ");
-has 'end_tag'       => (is => 'ro',   isa => 'Str',                     default  => " %]");
-has 'engine'        => (is => 'ro',   isa => 'CodeRef',                 default  => sub {\&TT2_engine});
-has 'engine_args'   => (is => 'ro',   isa => 'ArrayRef',                default  => sub {[]});
+has 'start_tag'          => (is => 'ro',   isa => 'Str',                     default  => "[% ");
+has 'end_tag'            => (is => 'ro',   isa => 'Str',                     default  => " %]");
+has 'engine'             => (is => 'ro',   isa => 'CodeRef',                 default  => sub {\&TT2_engine});
+has 'engine_args'        => (is => 'ro',   isa => 'ArrayRef',                default  => sub {[]});
 
 # attributes constructed by the module -- not received through the constructor
-has 'template_text' => (is => 'bare', isa => 'Str',                     init_arg => undef);
-has 'engine_stash'  => (is => 'bare', isa => 'HashRef',                 init_arg => undef,
-                                                                        clearer  => 'clear_stash');
+sub has_lazy ($@) {my $attr = shift; has($attr => @_, init_arg => undef, lazy => 1, builder => "_$attr")}
+has_lazy 'xml_regex'     => (is => 'ro',   isa => 'HashRef[RegexpRef]');
+has_lazy 'template_text' => (is => 'ro',   isa => 'HashRef[Str]');
+has_lazy 'engine_stash'  => (is => 'bare', isa => 'HashRef', clearer  => 'clear_stash');
+
+
+#======================================================================
+# GLOBALS
+#======================================================================
 
 my $XML_COMMENT_FOR_MARKING_DIRECTIVES = '<!--TEMPLATE_DIRECTIVE_ABOVE-->';
-
 
 
 #======================================================================
@@ -62,19 +78,13 @@ around BUILDARGS => sub {
 };
 
 
-sub BUILD {
-  my ($self) = @_;
-
-  # assemble the template text and store it into the bare attribute
-  $self->{template_text} = $self->build_template_text;
-}
-
-
-sub build_template_text {
+sub _xml_regex {
   my ($self) = @_;
 
   # start and end character sequences for a template fragment
   my ($rx_start, $rx_end) = map quotemeta, $self->start_tag, $self->end_tag;
+
+  my %regex;
 
   # Regexes for extracting template directives within the XML.
   # Such directives are identified through a specific XML comment -- this comment is
@@ -85,7 +95,7 @@ sub build_template_text {
   # XML node, we don't want that.
 
   # regex for matching directives to be treated outside the text flow.
-  my $regex_outside_text_flow = qr{
+  $regex{outside_text_flow} = qr{
       <w:r\b           [^>]*>                  # start run node
         (?: <w:rPr> .*? </w:rPr>   (*SKIP) )?  # optional run properties
         <w:t\b         [^>]*>                  # start text node
@@ -96,38 +106,57 @@ sub build_template_text {
    }sx;
 
   # regex for matching paragraphs that contain only a directive
-  my $regex_paragraph = qr{
+  $regex{paragraph} = qr{
     <w:p\b             [^>]*>                  # start paragraph node
       (?: <w:pPr> .*? </w:pPr>     (*SKIP) )?  # optional paragraph properties
-      $regex_outside_text_flow
+      $regex{outside_text_flow}
     </w:p>                                     # close paragraph node
    }sx;
 
   # regex for matching table rows that contain only a directive in the first cell
-  my $regex_row = qr{
+  $regex{row} = qr{
     <w:tr\b            [^>]*>                  # start row node
       <w:tc\b          [^>]*>                  # start cell node
          (?:<w:tcPr> .*? </w:tcPr> (*SKIP) )?  # cell properties
-         $regex_paragraph                      # paragraph in cell
+         $regex{paragraph}                     # paragraph in cell
       </w:tc>                                  # close cell node
       (?:<w:tc> .*? </w:tc>        (*SKIP) )*  # ignore other cells on the same row
     </w:tr>                                    # close row node
    }sx;
 
-  # assemble template fragments from all runs in the document into a global template text
-  $self->surgeon->cleanup_XML;
-  my @template_fragments = map {$self->template_fragment_for_run($_)}  @{$self->surgeon->runs};
-  my $template_text      = join "", @template_fragments;
-
-  # remove markup around directives, successively for table rows, for paragraphs, and finally
-  # for remaining directives embedded within text runs.
-  $template_text =~ s/$_/$1/g for $regex_row, $regex_paragraph, $regex_outside_text_flow;
-
-  return $template_text;
+  return \%regex;
 }
 
 
-sub template_fragment_for_run { # given an instance of Surgeon::Run, build a template fragment
+
+
+
+sub _template_text {
+  my ($self) = @_;
+
+  my %template_text;
+
+  foreach my $part_name ($self->part_names->@*) {
+    my $part = $self->surgeon->part($part_name);
+
+    # assemble template fragments from all runs in the part into a global template text
+    $part->cleanup_XML;
+    my @template_fragments     = map {$self->_template_fragment_for_run($_)} $part->runs->@*;
+    $template_text{$part_name} = join "", @template_fragments;
+
+    # remove markup around directives, successively for table rows, for paragraphs, and finally
+    # for remaining directives embedded within text runs.
+    $template_text{$part_name} =~ s/$_/$1/g for $self->xml_regex->@{qw/row paragraph outside_text_flow/};
+  }
+
+  return \%template_text;
+}
+
+
+
+
+
+sub _template_fragment_for_run { # given an instance of Surgeon::Run, build a template fragment
   my ($self, $run) = @_;
 
   my $props         = $run->props;
@@ -183,7 +212,7 @@ sub process {
   # insert the generated output into a new MsWord document; other zip members
   # are cloned from the original template
   my $new_doc = $self->surgeon->meta->clone_object($self->surgeon);
-  $new_doc->contents($new_XML);
+  $new_doc->part($_)->contents($new_XML->{$_}) foreach keys %$new_XML;
 
   return $new_doc;
 }
@@ -230,7 +259,7 @@ my %precompiled_blocks = (
     my $content = $stash->get('content');
     my $tooltip = $stash->get('tooltip');
     if ($tooltip) {
-      # TODO: escap quotes
+      # TODO: escape quotes
       $tooltip = qq{ w:tooltip="$tooltip"};
     }
     my $xml  = qq{<w:hyperlink w:anchor="$name"$tooltip>$content</w:hyperlink>};
@@ -253,7 +282,34 @@ my %precompiled_blocks = (
     return $xml;
   },
 
+
+  # a block for replacing an image by a new barcode
+  barcode => sub {
+    require Barcode::Code128;
+
+    my $context      = shift;
+    my $stash        = $context->stash;
+    my $package_part = $stash->get('package_part'); # Word::Surgeon::PackagePart
+    my $img          = $stash->get('img');          # title of an existing image to replace
+    my $to_encode    = $stash->get('content');      # text to be encoded
+    $to_encode =~ s(<[^>]+>)()g;
+
+    warn "generating barcode for $to_encode\n";
+    
+    #crée l'image PNG
+    my $bc = Barcode::Code128->new;
+    $bc->option(border    => 0,
+                show_text => 0,
+                padding   => 0);
+    my $png = $bc->png($to_encode);
+    $package_part->replace_image($img, $png);
+    return "";
+  },
+
+
 );
+
+
 
 
 
@@ -261,24 +317,26 @@ my %precompiled_blocks = (
 sub TT2_engine {
   my ($self, $vars) = @_;
 
-  require Template::AutoFilter; # a subclass of Template that adds automatic html filtering
-
-
-  # assemble args to be passed to the constructor
-  my %TT2_args = @{$self->engine_args};
-  $TT2_args{BLOCKS}{$_} //= $precompiled_blocks{$_} for keys %precompiled_blocks;
-
-
   # at the first invocation, create a TT2 compiled template and store it in the stash.
   # Further invocations just reuse the TT2 object in stash.
-  my $stash                     = $self->{engine_stash} //= {};
-  $stash->{TT2}               //= Template::AutoFilter->new(\%TT2_args);
-  $stash->{compiled_template} //= $stash->{TT2}->template(\$self->{template_text});
+  my $stash = $self->{engine_stash} //= do {
+    require Template::AutoFilter; # a subclass of Template that adds automatic html filtering
+    my %TT2_args         = @{$self->engine_args};
+    $TT2_args{BLOCKS}{$_} //= $precompiled_blocks{$_} for keys %precompiled_blocks;
+    my $TT2               = Template::AutoFilter->new(\%TT2_args);
+    my $tt_text           = $self->template_text;
+    my %compiled_template = map {($_ => $TT2->template(\$tt_text->{$_}))} keys %$tt_text;
+    {TT2 => $TT2, compiled_template => \%compiled_template};
+  };
 
-  # generate new XML by invoking the template on $vars
-  my $new_XML = $stash->{TT2}->context->process($stash->{compiled_template}, $vars);
+  # foreach part, generate new XML by invoking the template on $vars
+  my %new_XML;
+  while (my ($part_name, $tmpl) = each $stash->{compiled_template}->%*) {
+    my $full_vars = {package_part => $self->surgeon->part($part_name), %$vars};
+    $new_XML{$part_name} = $stash->{TT2}->context->process($tmpl, $full_vars);
+  }
 
-  return $new_XML;
+  return \%new_XML;
 }
 
 
