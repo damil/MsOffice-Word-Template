@@ -276,7 +276,7 @@ using control directives for loops, conditionals, subroutines, etc.
 =back
 
 
-Template authors just have to use the highlighing function in MsWord to
+Template authors just use the highlighing function in MsWord to
 mark the templating directives :
 
 =over
@@ -299,16 +299,21 @@ in order to avoid empty paragraphs or empty rows in the resulting document.
 
 The syntax of data and control directives depends on the backend
 templating engine.  The default engine is the L<Perl Template Toolkit|Template>;
-other engines can be specified through parameters
-to the L</new> method -- see the L</TEMPLATE ENGINE> section below.
+other engines can be specified as subclasses -- see the L</TEMPLATE ENGINE> section below.
 
 
 =head2 Status
 
-This first release is a proof of concept. Some simple templates have
-been successfully tried; however it is likely that a number of
-improvements will have to be made before this system can be used at
-large scale in production.  If you use this module, please keep me
+This second release is a major refactoring of the first version, together with
+a refactoring of L<MsOffice::Word::Surgeon>. New features include support
+for headers and footers and for image insertion. The internal object-oriented
+structure has been redesigned.
+
+This module has been used successfully for a pilot project in my organization,
+generating quite complex documents from deeply nested datastructures.
+Yet this has not been used yet at large scale in production, so it is quite likely
+that some youth defects may still be discovered.
+If you use this module, please keep me
 informed of your difficulties, tricks, suggestions, etc.
 
 
@@ -361,7 +366,7 @@ These are described in section L</TEMPLATE ENGINE> below.
   my $new_doc = $template->process(\%data);
   $new_doc->save_as($path_for_new_doc);
 
-Process the template on a given data tree, and return a new document
+Processes the template on a given data tree, and returns a new document
 (actually, a new instance of L<MsOffice::Word::Surgeon>).
 That document can then be saved  using L<MsOffice::Word::Surgeon/save_as>.
 
@@ -397,71 +402,43 @@ for paragraph nodes, run nodes and text nodes; but in that case you must
 also apply the "none" filter from L<Template::AutoFilter> so that
 angle brackets in XML markup do not get translated into HTML entities.
 
+See also L<MsOffice::Word::Template::Engine::TT2> for
+additional advice on authoring templates based on the
+L<Template Toolkit|Template>.
+
+
 
 =head1 TEMPLATE ENGINE
 
 This module invokes a backend I<templating engine> for interpreting the
-template directives. In order to use an engine different from the default
-L<Template Toolkit|Template>, you must supply the following parameters
-to the L</new> method :
+template directives. The default engine is
+L<MsOffice::Word::Template::Engine::TT2>, built on top of
+L<Template Toolkit|Template>. Another engine supplied in this distribution is
+L<MsOffice::Word::Template::Engine::Mustache>, mostly as an example.
+To implement another engine, just subclass
+L<MsOffice::Word::Template::Engine>.
+
+To use an engine different from the default, the following arguments
+must be supplied to the L</new> method :
 
 =over
 
-=item start_tag
+=item engine_class
 
-The string for identifying the start of a template directive
-
-=item end_tag
-
-The string for identifying the end of a template directive
-
-=item engine
-
-A reference to a method that will perform the templating operation (explained below)
+The name of the engine class. If the class is within the L<MsOffice::Word::Template::Engine>
+namespace, just the suffix is sufficient; otherwise, specify the fully qualified class name.
 
 =item engine_args
 
-An optional list of parameters that may be used by the engine
+An optional list of parameters that may be used for initializing the engine
 
 =back
 
+The engine will get a C<compile_template> method call for each part in the
+C<.docx> document (main 
+
 Given a datatree in C<$vars>, the engine will be called as :
 
-  my $engine  = $self->engine;
-  my $new_XML = $self->$engine($vars);
-
-It is up to the engine method to exploit C<< $self->engine_args >> if needed.
-
-If the engine is called repetively, it may need to store some data to be
-persistent between two calls, like for example a compiled version of the
-parsed template. To this end, there is an internal hashref attribute
-called C<engine_stash>. If necessary the stash can be cleared through
-the C<clear_stash> method.
-
-Here is an example using L<Template::Mustache> :
-
-  my $template = MsOffice::Word::Template->new(
-    docx      => $template_file,
-    start_tag => "{{",
-    end_tag   => "}}",
-    engine    => sub {
-      my ($self, $vars) = @_;
-
-      # at the first invocation, create a Mustache compiled template and store it in the stash.
-      # Further invocations will just reuse the object in stash.
-      my $stash            = $self->{engine_stash} //= {};
-      $stash->{mustache} //= Template::Mustache->new(
-        template => $self->{template_text},
-        @{$self->engine_args},   # for ex. partials, partial_path, context
-                                 # -- see L<Template::Mustache> documentation
-       );
-
-      # generate new XML by invoking the template on $vars
-      my $new_XML = $stash->{mustache}->render($vars);
-
-      return $new_XML;
-      },
-   );
 
 The engine must make sure that ampersand characters and angle brackets
 are automatically replaced by the corresponding HTML entities
@@ -476,56 +453,52 @@ but thanks to the L<Template::AutoFilter>
 module, this is performed automatically.
 
 
-=head1 AUTHORING NOTES SPECIFIC TO THE TEMPLATE TOOLKIT
 
-This chapter just gives a few hints for authoring Word templates with the
-Template Toolkit.
+This module invokes a backend I<templating engine> for interpreting the
+template directives. The default engine is
+L<MsOffice::Word::Template::Engine::TT2>, built on top of
+L<Template Toolkit|Template>. Another engine supplied in this distribution is
+L<MsOffice::Word::Template::Engine::Mustache>, mostly as an example.
+To implement another engine, just subclass
+L<MsOffice::Word::Template::Engine>.
 
-The examples below use [[double square brackets]] to indicate
-segments that should be highlighted in B<green> within the Word template.
+To use an engine different from the default, the following arguments
+must be supplied to the L</new> method :
 
+=over
 
-=head2 Bookmarks
+=item engine_class
 
-The template processor is instantiated with a predefined wrapper named C<bookmark>
-for generating Word bookmarks. Here is an example:
+The name of the engine class. If the class sits within the L<MsOffice::Word::Template::Engine>
+namespace, just the suffix is sufficient; otherwise, specify the fully qualified class name.
 
-  Here is a paragraph with [[WRAPPER bookmark name="my_bookmark"]]bookmarked text[[END]].
+=item engine_args
 
-The C<name> argument is automatically truncated to 40 characters, and non-alphanumeric
-characters are replaced by underscores, in order to comply with the limitations imposed by Word
-for bookmark names.
+An optional list of parameters that may be used for initializing the engine
 
-=head2 Internal hyperlinks
+=back
 
-Similarly, there is a predefined wrapper named C<link_to_bookmark> for generating
-hyperlinks to bookmarks. Here is an example:
+After initialization the engine will receive a C<compile_template> method call for each part in the
+C<.docx> document, i.e. not only the main document body, but also headers and footers.
 
-  Click [[WRAPPER link_to_bookmark name="my_bookmark" tooltip="tip top"]]here[[END]].
+Then the main C<process()> method, given a datatree in C<$vars>, will call
+the engine's C<process()> method on each document part.
 
-The C<tooltip> argument is optional.
+The engine must make sure that ampersand characters and angle brackets
+are automatically replaced by the corresponding HTML entities
+(otherwise the resulting XML would be incorrect and could not be
+opened by Microsoft Word).  The Mustache engine does this
+automatically.  The Template Toolkit would normally require to
+explicitly add an C<html> filter at each directive :
 
-=head2 Word fields
+  [% foo.bar | html %]
 
-A predefined block C<field> generates XML markup for Word fields, like for example :
-
-  Today is [[PROCESS field code="DATE \\@ \"h:mm am/pm, dddd, MMMM d\""]]
-
-Beware that quotes or backslashes must be escaped so that the Template Toolkit parser
-does not interpret these characters.
-
-The list of Word field codes is documented at 
-L<https://support.microsoft.com/en-us/office/list-of-field-codes-in-word-1ad6d91a-55a7-4a8d-b535-cf7888659a51>.
-
-When used as a wrapper, the C<field> block generates a Word field with alternative
-text content, displayed before the field gets updated. For example :
-
-  [[WRAPPER field code="TOC \o \"1-3\" \h \z \u"]]Table of contents - press F9 to update[[END]]
-
+but thanks to the L<Template::AutoFilter>
+module, this is performed automatically.
 
 =head1 TROUBLESHOOTING
 
-If the document generated by this module cannot open in Word, it is probably because the XML
+If a document generated by this module cannot open in Word, it is probably because the XML
 generated by your template is not equilibrated and therefore not valid.
 For example a template like this :
 
@@ -538,7 +511,7 @@ of a paragraph and closes at a different paragraph -- therefore when the I<condi
 evaluates to false, the XML tag for closing the initial paragraph will be missing.
 
 Compound directives like IF .. END, FOREACH .. END,  TRY .. CATCH .. END should therefore
-be equilibrated, either all within the same paragraph, or each directive on a separate 
+be equilibrated, either all within the same paragraph, or each directive on a separate
 paragraph. Examples like this should be successful :
 
   This paragraph [[ IF condition ]]has an optional part[[ ELSE ]]or an alternative[[ END ]].

@@ -1,8 +1,9 @@
 package MsOffice::Word::Template::Engine::TT2;
 use 5.024;
-use Moose;
-use Template::AutoFilter; # a subclass of Template that adds automatic html filtering
+use Template::AutoFilter;                     # a subclass of Template that adds automatic html filtering
+use HTML::Entities        qw(encode_entities);
 
+use Moose;
 extends 'MsOffice::Word::Template::Engine';
 
 # syntactic sugar for attributes
@@ -20,12 +21,9 @@ has       'start_tag' => (is => 'ro', isa => 'Str',    default  => "[% ");
 has       'end_tag'   => (is => 'ro', isa => 'Str',    default  => " %]");
 has_inner 'TT2'       => (is => 'ro', isa => 'Template');
 
-
-
 #======================================================================
 # LAZY ATTRIBUTE CONSTRUCTORS
 #======================================================================
-
 
 sub _TT2 {
   my ($self) = @_;
@@ -38,7 +36,6 @@ sub _TT2 {
 
   return Template::AutoFilter->new($TT2_args);
 }
-
 
 #======================================================================
 # METHODS
@@ -112,8 +109,7 @@ sub _precompiled_blocks {
       my $content = $stash->get('content');
       my $tooltip = $stash->get('tooltip');
       if ($tooltip) {
-        # TODO: escape quotes
-        $tooltip = qq{ w:tooltip="$tooltip"};
+        $tooltip = sprintf qq{ w:tooltip="%s"}, encode_entities($tooltip, '<>&"');
       }
       my $xml  = qq{<w:hyperlink w:anchor="$name"$tooltip>$content</w:hyperlink>};
 
@@ -191,8 +187,78 @@ __END__
 
 MsOffice::Word::Template::Engine::TT2 -- Word::Template engine based on the Template Toolkit
 
+=head1 SYNOPSIS
+
+  my $template = MsOffice::Word::Template->new(docx         => $filename
+                                               engine_class => 'TT2',
+                                               engine_args  => \%args_for_TemplateToolkit,
+                                               );
+
+  my $new_doc  = $template->process(\%data);
+
+See the main synopsis in L<MsOffice::Word::Template>.
+
 =head1 DESCRIPTION
 
 Implements a templating engine for L<MsOffice::Word::Template>, based on the
 L<Template Toolkit|Template>.
 
+
+=head1 AUTHORING NOTES SPECIFIC TO THE TEMPLATE TOOLKIT
+
+This chapter just gives a few hints for authoring Word templates with the
+Template Toolkit.
+
+The examples below use [[double square brackets]] to indicate
+segments that should be highlighted in B<green> within the Word template.
+
+
+=head2 Bookmarks
+
+The template processor is instantiated with a predefined wrapper named C<bookmark>
+for generating Word bookmarks. Here is an example:
+
+  Here is a paragraph with [[WRAPPER bookmark name="my_bookmark"]]bookmarked text[[END]].
+
+The C<name> argument is automatically truncated to 40 characters, and non-alphanumeric
+characters are replaced by underscores, in order to comply with the limitations imposed by Word
+for bookmark names.
+
+=head2 Internal hyperlinks
+
+Similarly, there is a predefined wrapper named C<link_to_bookmark> for generating
+hyperlinks to bookmarks. Here is an example:
+
+  Click [[WRAPPER link_to_bookmark name="my_bookmark" tooltip="tip top"]]here[[END]].
+
+The C<tooltip> argument is optional.
+
+=head2 Word fields
+
+A predefined block C<field> generates XML markup for Word fields, like for example :
+
+  Today is [[PROCESS field code="DATE \\@ \"h:mm am/pm, dddd, MMMM d\""]]
+
+Beware that quotes or backslashes must be escaped so that the Template Toolkit parser
+does not interpret these characters.
+
+The list of Word field codes is documented at 
+L<https://support.microsoft.com/en-us/office/list-of-field-codes-in-word-1ad6d91a-55a7-4a8d-b535-cf7888659a51>.
+
+When used as a wrapper, the C<field> block generates a Word field with alternative
+text content, displayed before the field gets updated. For example :
+
+  [[WRAPPER field code="TOC \o \"1-3\" \h \z \u"]]Table of contents - press F9 to update[[END]]
+
+
+
+=head1 AUTHOR
+
+Laurent Dami, E<lt>dami AT cpan DOT org<gt>
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright 2020-2022 by Laurent Dami.
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself.
