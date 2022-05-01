@@ -8,7 +8,7 @@ sub has_slot ($@) {my $attr = shift; has($attr => @_, is => 'bare', init_arg => 
 
 use namespace::clean -except => 'meta';
 
-our $VERSION = '1.02';
+our $VERSION = '2.0';
 
 #======================================================================
 # ATTRIBUTES

@@ -8,7 +8,7 @@ extends 'MsOffice::Word::Template::Engine';
 
 use namespace::clean -except => 'meta';
 
-our $VERSION = '1.02';
+our $VERSION = '2.0';
 
 #======================================================================
 # ATTRIBUTES

@@ -11,7 +11,7 @@ sub has_inner ($@) {my $attr = shift; has($attr => @_, init_arg => undef, lazy =
 
 use namespace::clean -except => 'meta';
 
-our $VERSION = '1.02';
+our $VERSION = '2.0';
 
 #======================================================================
 # ATTRIBUTES
@@ -143,9 +143,7 @@ sub _precompiled_blocks {
       my $to_encode    = $stash->get('content');      # text to be encoded
       $to_encode =~ s(<[^>]+>)()g;
 
-      warn "generating barcode for $to_encode\n";
-
-      #crée l'image PNG
+      # create PNG image
       my $bc = Barcode::Code128->new;
       $bc->option(border    => 0,
                   show_text => 0,

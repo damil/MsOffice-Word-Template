@@ -11,7 +11,7 @@ sub has_inner ($@) {my $attr = shift; has($attr => @_, init_arg => undef, lazy =
 
 use namespace::clean -except => 'meta';
 
-our $VERSION = '1.02';
+our $VERSION = '2.0';
 
 #======================================================================
 # ATTRIBUTES
