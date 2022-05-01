@@ -1,13 +1,13 @@
 package MsOffice::Word::Template;
-use 5.022;
+use 5.024;
 use Moose;
 use MooseX::StrictConstructor;
 use Carp                           qw(croak);
 use HTML::Entities                 qw(decode_entities);
-use MsOffice::Word::Surgeon 1.08;
+use MsOffice::Word::Surgeon 2.0;
 
-# https://badger.developpez.com/tutoriels/dotnet/creer-fichier-word-openxml/
-
+# syntactic sugar for attributes
+sub has_inner ($@) {my $attr = shift; has($attr => @_, init_arg => undef, lazy => 1, builder => "_$attr")}
 
 use namespace::clean -except => 'meta';
 
@@ -19,26 +19,19 @@ our $VERSION = '1.02';
 
 # constructor attributes for interacting with MsWord
 # See also BUILDARGS: the constructor can also take a "docx" arg
-# that will be translated into a "surgeon" attribute
-has 'surgeon'            => (is => 'ro',   isa => 'MsOffice::Word::Surgeon', required => 1);
-has 'data_color'         => (is => 'ro',   isa => 'Str',                     default  => "yellow");
-has 'control_color'      => (is => 'ro',   isa => 'Str',                     default  => "green");
-has 'part_names'         => (is => 'ro',   isa => 'ArrayRef[Str]',           default  => sub {[keys shift->surgeon->parts->%*]},
-                                                                             lazy     => 1);
+# that will be automatically translated into a "surgeon" attribute
+has 'surgeon'       => (is => 'ro', isa => 'MsOffice::Word::Surgeon', required => 1);
+has 'data_color'    => (is => 'ro', isa => 'Str',                     default  => "yellow");
+has 'control_color' => (is => 'ro', isa => 'Str',                     default  => "green");
+has 'part_names'    => (is => 'ro', isa => 'ArrayRef[Str]',           lazy     => 1,
+                        default  => sub {[keys shift->surgeon->parts->%*]});
 
-# constructor attributes for interacting with the chosen template engine
-# Filled by default with values for the Template Toolkit (a.k.a TT2)
-has 'start_tag'          => (is => 'ro',   isa => 'Str',                     default  => "[% ");
-has 'end_tag'            => (is => 'ro',   isa => 'Str',                     default  => " %]");
-has 'engine'             => (is => 'ro',   isa => 'CodeRef',                 default  => sub {\&TT2_engine});
-has 'engine_args'        => (is => 'ro',   isa => 'ArrayRef',                default  => sub {[]});
+# constructor attributes for building a templating engine
+has 'engine_class'  => (is => 'ro', isa => 'Str',                     default  => 'TT2');
+has 'engine_args'   => (is => 'ro', isa => 'ArrayRef',                default  => sub {[]});
 
-# attributes constructed by the module -- not received through the constructor
-sub has_lazy ($@) {my $attr = shift; has($attr => @_, init_arg => undef, lazy => 1, builder => "_$attr")}
-has_lazy 'xml_regex'     => (is => 'ro',   isa => 'HashRef[RegexpRef]');
-has_lazy 'template_text' => (is => 'ro',   isa => 'HashRef[Str]');
-has_lazy 'engine_stash'  => (is => 'bare', isa => 'HashRef', clearer  => 'clear_stash');
-
+# attributes lazily constructed by the module -- not received through the constructor
+has_inner 'engine'  => (is => 'ro', isa => 'MsOffice::Word::Template::Engine');
 
 #======================================================================
 # GLOBALS
@@ -48,9 +41,8 @@ my $XML_COMMENT_FOR_MARKING_DIRECTIVES = '<!--TEMPLATE_DIRECTIVE_ABOVE-->';
 
 
 #======================================================================
-# BUILDING THE TEMPLATE
+# BUILDING INSTANCES
 #======================================================================
-
 
 # syntactic sugar for supporting ->new($surgeon) instead of ->new(surgeon => $surgeon)
 around BUILDARGS => sub {
@@ -78,109 +70,84 @@ around BUILDARGS => sub {
 };
 
 
-sub _xml_regex {
+#======================================================================
+# LAZY ATTRIBUTE CONSTRUCTORS
+#======================================================================
+
+
+sub _engine {
   my ($self) = @_;
 
-  # start and end character sequences for a template fragment
-  my ($rx_start, $rx_end) = map quotemeta, $self->start_tag, $self->end_tag;
+  # instantiate the templating engine
+  my $engine_class = $self->engine_class;
+  my $engine;
+  my @load_errors;
+ CLASS:
+  for my $class ("MsOffice::Word::Template::Engine::$engine_class", $engine_class) {
+    eval "require $class; 1"                        or  push @load_errors, $@ and next CLASS;
+    $engine = $class->new($self->engine_args->@*)                             and last CLASS;
+  }
+  $engine or die "could not load engine class '$engine_class'", @load_errors;
 
-  my %regex;
+  # compile regexes based on the start/end tags
+  my ($start_tag, $end_tag) = ($engine->start_tag, $engine->end_tag);
+  my @xml_regexes = $self->_xml_regexes($start_tag, $end_tag);
 
-  # Regexes for extracting template directives within the XML.
-  # Such directives are identified through a specific XML comment -- this comment is
-  # inserted by method "template_fragment_for_run()" below.
-  # The (*SKIP) instructions are used to avoid backtracking after a
-  # closing tag for the subexpression has been found. Otherwise the
-  # .*? inside could possibly match across boundaries of the current
-  # XML node, we don't want that.
-
-  # regex for matching directives to be treated outside the text flow.
-  $regex{outside_text_flow} = qr{
-      <w:r\b           [^>]*>                  # start run node
-        (?: <w:rPr> .*? </w:rPr>   (*SKIP) )?  # optional run properties
-        <w:t\b         [^>]*>                  # start text node
-          ($rx_start .*? $rx_end)  (*SKIP)     # template directive
-          $XML_COMMENT_FOR_MARKING_DIRECTIVES  # specific XML comment
-        </w:t>                                 # close text node
-      </w:r>                                   # close run node
-   }sx;
-
-  # regex for matching paragraphs that contain only a directive
-  $regex{paragraph} = qr{
-    <w:p\b             [^>]*>                  # start paragraph node
-      (?: <w:pPr> .*? </w:pPr>     (*SKIP) )?  # optional paragraph properties
-      $regex{outside_text_flow}
-    </w:p>                                     # close paragraph node
-   }sx;
-
-  # regex for matching table rows that contain only a directive in the first cell
-  $regex{row} = qr{
-    <w:tr\b            [^>]*>                  # start row node
-      <w:tc\b          [^>]*>                  # start cell node
-         (?:<w:tcPr> .*? </w:tcPr> (*SKIP) )?  # cell properties
-         $regex{paragraph}                     # paragraph in cell
-      </w:tc>                                  # close cell node
-      (?:<w:tc> .*? </w:tc>        (*SKIP) )*  # ignore other cells on the same row
-    </w:tr>                                    # close row node
-   }sx;
-
-  return \%regex;
-}
-
-
-
-
-
-sub _template_text {
-  my ($self) = @_;
-
-  my %template_text;
-
+  # tell the engine to build a compiled template for each document part
   foreach my $part_name ($self->part_names->@*) {
     my $part = $self->surgeon->part($part_name);
 
     # assemble template fragments from all runs in the part into a global template text
     $part->cleanup_XML;
-    my @template_fragments     = map {$self->_template_fragment_for_run($_)} $part->runs->@*;
-    $template_text{$part_name} = join "", @template_fragments;
+    my @template_fragments = map {$self->_template_fragment_for_run($_, $start_tag, $end_tag)}
+                                 $part->runs->@*;
+    my $template_text      = join "", @template_fragments;
 
     # remove markup around directives, successively for table rows, for paragraphs, and finally
     # for remaining directives embedded within text runs.
-    $template_text{$part_name} =~ s/$_/$1/g for $self->xml_regex->@{qw/row paragraph outside_text_flow/};
+    $template_text =~ s/$_/$1/g foreach @xml_regexes;
+
+    # compile and store the template
+    $engine->compile_template($part_name => $template_text);
   }
 
-  return \%template_text;
+  return $engine;
 }
 
 
 
+#======================================================================
+# UTILITY METHODS
+#======================================================================
+
 
 
 sub _template_fragment_for_run { # given an instance of Surgeon::Run, build a template fragment
-  my ($self, $run) = @_;
+  my ($self, $run, $start_tag, $end_tag) = @_;
 
   my $props         = $run->props;
   my $data_color    = $self->data_color;
   my $control_color = $self->control_color;
 
-  # if this run is highlighted in yellow or green, it must be translated into a template directive
+  # if this run is highlighted in data or control color, it must be translated into a template directive
   if ($props =~ s{<w:highlight w:val="($data_color|$control_color)"/>}{}) {
     my $color       = $1;
     my $xml         = $run->xml_before;
 
+    # re-build the run, removing the highlight, and adding the start/end tags for the template engine
     my $inner_texts = $run->inner_texts;
     if (@$inner_texts) {
       $xml .= "<w:r>";                                                # opening XML tag for run node
       $xml .= "<w:rPr>" . $props . "</w:rPr>" if $props;              # optional run properties
       $xml .= "<w:t>";                                                # opening XML tag for text node
-      $xml .= $self->start_tag;                                       # start a template directive
+      $xml .= $start_tag;                                             # start a template directive
       foreach my $inner_text (@$inner_texts) {                        # loop over text nodes
         my $txt = decode_entities($inner_text->literal_text);         # just take inner literal text
         $xml .= $txt . "\n";
         # NOTE : adding "\n" because the template parser may need them for identifying end of comments
       }
 
-      $xml .= $self->end_tag;                                         # end of template directive
+      $xml .= $end_tag;                                               # end of template directive
       $xml .= $XML_COMMENT_FOR_MARKING_DIRECTIVES
                                          if $color eq $control_color; # XML comment for marking
       $xml .= "</w:t>";                                               # closing XML tag for text node
@@ -198,6 +165,60 @@ sub _template_fragment_for_run { # given an instance of Surgeon::Run, build a te
 
 
 
+
+sub _xml_regexes {
+  my ($self, $start_tag, $end_tag) = @_;
+
+  # start and end character sequences for a template fragment
+  my $rx_start = quotemeta  $start_tag;
+  my $rx_end   = quotemeta  $end_tag;
+
+  # Regexes for extracting template directives within the XML.
+  # Such directives are identified through a specific XML comment -- this comment is
+  # inserted by method "template_fragment_for_run()" below.
+  # The (*SKIP) instructions are used to avoid backtracking after a
+  # closing tag for the subexpression has been found. Otherwise the
+  # .*? inside could possibly match across boundaries of the current
+  # XML node, we don't want that.
+
+  # regex for matching directives to be treated outside the text flow.
+  my $rx_outside_text_flow = qr{
+      <w:r\b           [^>]*>                  # start run node
+        (?: <w:rPr> .*? </w:rPr>   (*SKIP) )?  # optional run properties
+        <w:t\b         [^>]*>                  # start text node
+          ($rx_start .*? $rx_end)  (*SKIP)     # template directive
+          $XML_COMMENT_FOR_MARKING_DIRECTIVES  # specific XML comment
+        </w:t>                                 # close text node
+      </w:r>                                   # close run node
+   }sx;
+
+  # regex for matching paragraphs that contain only a directive
+  my $rx_paragraph = qr{
+    <w:p\b             [^>]*>                  # start paragraph node
+      (?: <w:pPr> .*? </w:pPr>     (*SKIP) )?  # optional paragraph properties
+      $rx_outside_text_flow
+    </w:p>                                     # close paragraph node
+   }sx;
+
+  # regex for matching table rows that contain only a directive in the first cell
+  my $rx_row = qr{
+    <w:tr\b            [^>]*>                  # start row node
+      <w:tc\b          [^>]*>                  # start cell node
+         (?:<w:tcPr> .*? </w:tcPr> (*SKIP) )?  # cell properties
+         $rx_paragraph                         # paragraph in cell
+      </w:tc>                                  # close cell node
+      (?:<w:tc> .*? </w:tc>        (*SKIP) )*  # ignore other cells on the same row
+    </w:tr>                                    # close row node
+   }sx;
+
+  return ($rx_row, $rx_paragraph, $rx_outside_text_flow);
+  # Note : the order is important
+}
+
+
+
+
+
 #======================================================================
 # PROCESSING THE TEMPLATE
 #======================================================================
@@ -205,156 +226,16 @@ sub _template_fragment_for_run { # given an instance of Surgeon::Run, build a te
 sub process {
   my ($self, $vars) = @_;
 
-  # process the template to generate new XML
-  my $engine  = $self->engine;
-  my $new_XML = $self->$engine($vars);
+  # create a clone of the original 
+  my $new_doc = $self->surgeon->clone;
 
-  # insert the generated output into a new MsWord document; other zip members
-  # are cloned from the original template
-  my $new_doc = $self->surgeon->meta->clone_object($self->surgeon);
-  $new_doc->part($_)->contents($new_XML->{$_}) foreach keys %$new_XML;
-
-  return $new_doc;
-}
-
-
-#======================================================================
-# DEFAULT ENGINE : TEMPLATE TOOLKIT, a.k.a. TT2
-#======================================================================
-
-# arbitrary value for the first bookmark id. 100 should most often be above other
-# bookmarks generated by Word itself. TODO : would be better to find the highest
-# id number really used in the template
-my $first_bookmark_id = 100;
-
-# precompiled blocks as facilities to be used within templates
-my %precompiled_blocks = (
-
-  # a wrapper block for inserting a Word bookmark
-  bookmark => sub {
-    my $context     = shift;
-    my $stash       = $context->stash;
-
-    # assemble xml markup
-    my $bookmark_id = $stash->get('global.bookmark_id') || $first_bookmark_id;
-    my $name        = fix_bookmark_name($stash->get('name') || 'anonymous_bookmark');
-
-    my $xml         = qq{<w:bookmarkStart w:id="$bookmark_id" w:name="$name"/>}
-                    . $stash->get('content') # content of the wrapper
-                    . qq{<w:bookmarkEnd w:id="$bookmark_id"/>};
-
-    # next bookmark will need a fresh id
-    $stash->set('global.bookmark_id', $bookmark_id+1);
-
-    return $xml;
-  },
-
-  # a wrapper block for linking to a bookmark
-  link_to_bookmark => sub {
-    my $context = shift;
-    my $stash   = $context->stash;
-
-    # assemble xml markup
-    my $name    = fix_bookmark_name($stash->get('name') || 'anonymous_bookmark');
-    my $content = $stash->get('content');
-    my $tooltip = $stash->get('tooltip');
-    if ($tooltip) {
-      # TODO: escape quotes
-      $tooltip = qq{ w:tooltip="$tooltip"};
-    }
-    my $xml  = qq{<w:hyperlink w:anchor="$name"$tooltip>$content</w:hyperlink>};
-
-    return $xml;
-  },
-
-  # a block for generating a Word field. Can also be used as wrapper.
-  field => sub {
-    my $context = shift;
-    my $stash   = $context->stash;
-    my $code    = $stash->get('code');         # field code, including possible flags
-    my $text    = $stash->get('content');      # initial text content (before updating the field)
-
-    my $xml     = qq{<w:r><w:fldChar w:fldCharType="begin"/></w:r>}
-                . qq{<w:r><w:instrText xml:space="preserve"> $code </w:instrText></w:r>};
-    $xml       .= qq{<w:r><w:fldChar w:fldCharType="separate"/></w:r>$text} if $text;
-    $xml       .= qq{<w:r><w:fldChar w:fldCharType="end"/></w:r>};
-
-    return $xml;
-  },
-
-
-  # a block for replacing an image by a new barcode
-  barcode => sub {
-    require Barcode::Code128;
-
-    my $context      = shift;
-    my $stash        = $context->stash;
-    my $package_part = $stash->get('package_part'); # Word::Surgeon::PackagePart
-    my $img          = $stash->get('img');          # title of an existing image to replace
-    my $to_encode    = $stash->get('content');      # text to be encoded
-    $to_encode =~ s(<[^>]+>)()g;
-
-    warn "generating barcode for $to_encode\n";
-    
-    #crée l'image PNG
-    my $bc = Barcode::Code128->new;
-    $bc->option(border    => 0,
-                show_text => 0,
-                padding   => 0);
-    my $png = $bc->png($to_encode);
-    $package_part->replace_image($img, $png);
-    return "";
-  },
-
-
-);
-
-
-
-
-
-
-sub TT2_engine {
-  my ($self, $vars) = @_;
-
-  # at the first invocation, create a TT2 compiled template and store it in the stash.
-  # Further invocations just reuse the TT2 object in stash.
-  my $stash = $self->{engine_stash} //= do {
-    require Template::AutoFilter; # a subclass of Template that adds automatic html filtering
-    my %TT2_args         = @{$self->engine_args};
-    $TT2_args{BLOCKS}{$_} //= $precompiled_blocks{$_} for keys %precompiled_blocks;
-    my $TT2               = Template::AutoFilter->new(\%TT2_args);
-    my $tt_text           = $self->template_text;
-    my %compiled_template = map {($_ => $TT2->template(\$tt_text->{$_}))} keys %$tt_text;
-    {TT2 => $TT2, compiled_template => \%compiled_template};
-  };
-
-  # foreach part, generate new XML by invoking the template on $vars
-  my %new_XML;
-  while (my ($part_name, $tmpl) = each $stash->{compiled_template}->%*) {
-    my $full_vars = {package_part => $self->surgeon->part($part_name), %$vars};
-    $new_XML{$part_name} = $stash->{TT2}->context->process($tmpl, $full_vars);
+  foreach my $part_name ($self->part_names->@*) {
+    my $new_doc_part = $new_doc->part($part_name);
+    my $new_contents = $self->engine->process($part_name, $new_doc_part, $vars);
+    $new_doc_part->contents($new_contents);
   }
 
-  return \%new_XML;
-}
-
-
-#======================================================================
-# UTILITY ROUTINES (not methods)
-#======================================================================
-
-
-sub fix_bookmark_name {
-  my $name = shift;
-
-  # see https://stackoverflow.com/questions/852922/what-are-the-limitations-for-bookmark-names-in-microsoft-word
-
-  $name =~ s/[^\w_]+/_/g;                              # only digits, letters or underscores
-  $name =~ s/^(\d)/_$1/;                               # cannot start with a digit
-  $name = substr($name, 0, 40) if length($name) > 40;  # max 40 characters long
-
-  return $name;
+  return $new_doc;
 }
 
 
@@ -639,7 +520,7 @@ L<https://support.microsoft.com/en-us/office/list-of-field-codes-in-word-1ad6d91
 When used as a wrapper, the C<field> block generates a Word field with alternative
 text content, displayed before the field gets updated. For example :
 
-  [[WRAPPER field code="TOC \o \"1-3\" \h \z \u"]]Table of contents – press F9 to update[[END]]
+  [[WRAPPER field code="TOC \o \"1-3\" \h \z \u"]]Table of contents - press F9 to update[[END]]
 
 
 =head1 TROUBLESHOOTING
