@@ -425,50 +425,6 @@ must be supplied to the L</new> method :
 
 =item engine_class
 
-The name of the engine class. If the class is within the L<MsOffice::Word::Template::Engine>
-namespace, just the suffix is sufficient; otherwise, specify the fully qualified class name.
-
-=item engine_args
-
-An optional list of parameters that may be used for initializing the engine
-
-=back
-
-The engine will get a C<compile_template> method call for each part in the
-C<.docx> document (main 
-
-Given a datatree in C<$vars>, the engine will be called as :
-
-
-The engine must make sure that ampersand characters and angle brackets
-are automatically replaced by the corresponding HTML entities
-(otherwise the resulting XML would be incorrect and could not be
-opened by Microsoft Word).  The Mustache engine does this
-automatically.  The Template Toolkit would normally require to
-explicitly add an C<html> filter at each directive :
-
-  [% foo.bar | html %]
-
-but thanks to the L<Template::AutoFilter>
-module, this is performed automatically.
-
-
-
-This module invokes a backend I<templating engine> for interpreting the
-template directives. The default engine is
-L<MsOffice::Word::Template::Engine::TT2>, built on top of
-L<Template Toolkit|Template>. Another engine supplied in this distribution is
-L<MsOffice::Word::Template::Engine::Mustache>, mostly as an example.
-To implement another engine, just subclass
-L<MsOffice::Word::Template::Engine>.
-
-To use an engine different from the default, the following arguments
-must be supplied to the L</new> method :
-
-=over
-
-=item engine_class
-
 The name of the engine class. If the class sits within the L<MsOffice::Word::Template::Engine>
 namespace, just the suffix is sufficient; otherwise, specify the fully qualified class name.
 
