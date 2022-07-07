@@ -42,9 +42,9 @@ sub _TT2 {
 #======================================================================
 
 sub compile_template {
-  my ($self, $part_name, $template_text) = @_;
+  my ($self, $template_text) = @_;
 
-  $self->{_compiled_template}{$part_name} = $self->TT2->template(\$template_text);
+  return $self->TT2->template(\$template_text);
 }
 
 

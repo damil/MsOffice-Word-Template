@@ -74,7 +74,7 @@ sub _compile_templates {
     $template_text =~ s/$_/$1/g foreach @xml_regexes;
 
     # compile and store the template
-    $self->compile_template($part_name => $template_text);
+    $self->{_compiled_template}{$part_name} = $self->compile_template($template_text);
   }
 }
 

@@ -22,9 +22,9 @@ has       'end_tag'           => (is => 'ro',   isa => 'Str',  default  => "}}")
 #======================================================================
 
 sub compile_template {
-  my ($self, $part_name, $template_text) = @_;
+  my ($self, $template_text) = @_;
 
-  $self->{compiled_template}{$part_name} = Template::Mustache->new(
+  return Template::Mustache->new(
     template => $template_text,
     $self->{_constructor_args}->%*,
    );
@@ -34,7 +34,7 @@ sub compile_template {
 sub process {
   my ($self, $part_name, $package_part, $vars) = @_;
 
-  my $tmpl         = $self->{compiled_template}{$part_name}
+  my $tmpl         = $self->{_compiled_template}{$part_name}
     or die "don't have a compiled template for '$part_name'";
 
   my $new_contents = $tmpl->render($vars);
