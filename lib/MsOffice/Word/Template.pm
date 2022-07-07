@@ -3,7 +3,6 @@ use 5.024;
 use Moose;
 use MooseX::StrictConstructor;
 use Carp                           qw(croak);
-use HTML::Entities                 qw(decode_entities);
 use MsOffice::Word::Surgeon 2.0;
 
 # syntactic sugar for attributes
@@ -32,12 +31,6 @@ has 'engine_args'   => (is => 'ro', isa => 'ArrayRef',                default  =
 
 # attributes lazily constructed by the module -- not received through the constructor
 has_inner 'engine'  => (is => 'ro', isa => 'MsOffice::Word::Template::Engine');
-
-#======================================================================
-# GLOBALS
-#======================================================================
-
-my $XML_COMMENT_FOR_MARKING_DIRECTIVES = '<!--TEMPLATE_DIRECTIVE_ABOVE-->';
 
 
 #======================================================================
@@ -89,133 +82,11 @@ sub _engine {
   }
   $engine or die "could not load engine class '$engine_class'", @load_errors;
 
-  # compile regexes based on the start/end tags
-  my ($start_tag, $end_tag) = ($engine->start_tag, $engine->end_tag);
-  my @xml_regexes = $self->_xml_regexes($start_tag, $end_tag);
-
-  # tell the engine to build a compiled template for each document part
-  foreach my $part_name ($self->part_names->@*) {
-    my $part = $self->surgeon->part($part_name);
-
-    # assemble template fragments from all runs in the part into a global template text
-    $part->cleanup_XML;
-    my @template_fragments = map {$self->_template_fragment_for_run($_, $start_tag, $end_tag)}
-                                 $part->runs->@*;
-    my $template_text      = join "", @template_fragments;
-
-    # remove markup around directives, successively for table rows, for paragraphs, and finally
-    # for remaining directives embedded within text runs.
-    $template_text =~ s/$_/$1/g foreach @xml_regexes;
-
-    # compile and store the template
-    $engine->compile_template($part_name => $template_text);
-  }
+  # prepare the engine by precompiling an inner template for each part
+  $engine->_compile_templates($self);
 
   return $engine;
 }
-
-
-
-#======================================================================
-# UTILITY METHODS
-#======================================================================
-
-
-
-sub _template_fragment_for_run { # given an instance of Surgeon::Run, build a template fragment
-  my ($self, $run, $start_tag, $end_tag) = @_;
-
-  my $props         = $run->props;
-  my $data_color    = $self->data_color;
-  my $control_color = $self->control_color;
-
-  # if this run is highlighted in data or control color, it must be translated into a template directive
-  if ($props =~ s{<w:highlight w:val="($data_color|$control_color)"/>}{}) {
-    my $color       = $1;
-    my $xml         = $run->xml_before;
-
-    # re-build the run, removing the highlight, and adding the start/end tags for the template engine
-    my $inner_texts = $run->inner_texts;
-    if (@$inner_texts) {
-      $xml .= "<w:r>";                                                # opening XML tag for run node
-      $xml .= "<w:rPr>" . $props . "</w:rPr>" if $props;              # optional run properties
-      $xml .= "<w:t>";                                                # opening XML tag for text node
-      $xml .= $start_tag;                                             # start a template directive
-      foreach my $inner_text (@$inner_texts) {                        # loop over text nodes
-        my $txt = decode_entities($inner_text->literal_text);         # just take inner literal text
-        $xml .= $txt . "\n";
-        # NOTE : adding "\n" because the template parser may need them for identifying end of comments
-      }
-
-      $xml .= $end_tag;                                               # end of template directive
-      $xml .= $XML_COMMENT_FOR_MARKING_DIRECTIVES
-                                         if $color eq $control_color; # XML comment for marking
-      $xml .= "</w:t>";                                               # closing XML tag for text node
-      $xml .= "</w:r>";                                               # closing XML tag for run node
-    }
-
-    return $xml;
-  }
-
-  # otherwise this run is just regular MsWord content
-  else {
-    return $run->as_xml;
-  }
-}
-
-
-
-
-sub _xml_regexes {
-  my ($self, $start_tag, $end_tag) = @_;
-
-  # start and end character sequences for a template fragment
-  my $rx_start = quotemeta  $start_tag;
-  my $rx_end   = quotemeta  $end_tag;
-
-  # Regexes for extracting template directives within the XML.
-  # Such directives are identified through a specific XML comment -- this comment is
-  # inserted by method "template_fragment_for_run()" below.
-  # The (*SKIP) instructions are used to avoid backtracking after a
-  # closing tag for the subexpression has been found. Otherwise the
-  # .*? inside could possibly match across boundaries of the current
-  # XML node, we don't want that.
-
-  # regex for matching directives to be treated outside the text flow.
-  my $rx_outside_text_flow = qr{
-      <w:r\b           [^>]*>                  # start run node
-        (?: <w:rPr> .*? </w:rPr>   (*SKIP) )?  # optional run properties
-        <w:t\b         [^>]*>                  # start text node
-          ($rx_start .*? $rx_end)  (*SKIP)     # template directive
-          $XML_COMMENT_FOR_MARKING_DIRECTIVES  # specific XML comment
-        </w:t>                                 # close text node
-      </w:r>                                   # close run node
-   }sx;
-
-  # regex for matching paragraphs that contain only a directive
-  my $rx_paragraph = qr{
-    <w:p\b             [^>]*>                  # start paragraph node
-      (?: <w:pPr> .*? </w:pPr>     (*SKIP) )?  # optional paragraph properties
-      $rx_outside_text_flow
-    </w:p>                                     # close paragraph node
-   }sx;
-
-  # regex for matching table rows that contain only a directive in the first cell
-  my $rx_row = qr{
-    <w:tr\b            [^>]*>                  # start row node
-      <w:tc\b          [^>]*>                  # start cell node
-         (?:<w:tcPr> .*? </w:tcPr> (*SKIP) )?  # cell properties
-         $rx_paragraph                         # paragraph in cell
-      </w:tc>                                  # close cell node
-      (?:<w:tc> .*? </w:tc>        (*SKIP) )*  # ignore other cells on the same row
-    </w:tr>                                    # close row node
-   }sx;
-
-  return ($rx_row, $rx_paragraph, $rx_outside_text_flow);
-  # Note : the order is important
-}
-
-
 
 
 
