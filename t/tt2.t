@@ -17,6 +17,14 @@ diag( "Testing MsOffice::Word::Template $MsOffice::Word::Template::VERSION, Perl
 
 my $template = MsOffice::Word::Template->new($template_file);
 
+$template->engine->TT2->context->define_vmethod(list => map_field => sub {
+    my ($list, $key) = @_;
+    my @map = map {$_->{$key}} @$list;
+    return \@map;
+  });
+
+
+
 my %data = (
   foo => 'FOFOLLE',
   bar => 'WHISKY & <GIN>',

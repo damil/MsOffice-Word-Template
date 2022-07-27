@@ -25,6 +25,7 @@ has_slot '_compiled_template' => (isa => 'HashRef');
 abstract 'start_tag';
 abstract 'end_tag';
 abstract 'compile_template';
+abstract 'process_part';
 abstract 'process';
 
 #======================================================================
@@ -32,7 +33,6 @@ abstract 'process';
 #======================================================================
 
 my $XML_COMMENT_FOR_MARKING_DIRECTIVES = '<!--TEMPLATE_DIRECTIVE_ABOVE-->';
-
 
 #======================================================================
 # INSTANCE CONSTRUCTION
@@ -55,13 +55,14 @@ sub _compile_templates {
 
   my $data_color    = $word_template->data_color;
   my $control_color = $word_template->control_color;
+  my $surgeon       = $word_template->surgeon;
 
   # compile regexes to be tried on each run in the document
   my @xml_regexes = $self->_xml_regexes;
 
-  # tell the engine to build a compiled template for each document part
+  # build a compiled template for each document part
   foreach my $part_name ($word_template->part_names->@*) {
-    my $part = $word_template->surgeon->part($part_name);
+    my $part = $surgeon->part($part_name);
 
     # assemble template fragments from all runs in the part into a global template text
     $part->cleanup_XML;
@@ -75,6 +76,14 @@ sub _compile_templates {
 
     # compile and store the template
     $self->{_compiled_template}{$part_name} = $self->compile_template($template_text);
+  }
+
+  # build a compiled template for each property file (core.xml, app.xml, custom.xml)
+  foreach my $property_file ($word_template->property_files->@*) {
+    if ($surgeon->zip->memberNamed($property_file)) {
+      my $xml = $surgeon->xml_member($property_file);
+      $self->{_compiled_template}{$property_file} = $self->compile_template($xml);
+    }
   }
 }
 

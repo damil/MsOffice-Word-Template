@@ -24,6 +24,8 @@ has 'data_color'    => (is => 'ro', isa => 'Str',                     default  =
 has 'control_color' => (is => 'ro', isa => 'Str',                     default  => "green");
 has 'part_names'    => (is => 'ro', isa => 'ArrayRef[Str]',           lazy     => 1,
                         default  => sub {[keys shift->surgeon->parts->%*]});
+has 'property_files'=> (is => 'ro', isa => 'ArrayRef[Str]',
+                        default => sub {[qw(docProps/core.xml docProps/app.xml docProps/custom.xml)]});
 
 # constructor attributes for building a templating engine
 has 'engine_class'  => (is => 'ro', isa => 'Str',                     default  => 'TT2');
@@ -82,7 +84,7 @@ sub _engine {
   }
   $engine or die "could not load engine class '$engine_class'", @load_errors;
 
-  # prepare the engine by precompiling an inner template for each part
+  # prepare the engine by precompiling an inner template for each package part and each property file
   $engine->_compile_templates($self);
 
   return $engine;
@@ -100,10 +102,19 @@ sub process {
   # create a clone of the original 
   my $new_doc = $self->surgeon->clone;
 
+  # process each package part
   foreach my $part_name ($self->part_names->@*) {
     my $new_doc_part = $new_doc->part($part_name);
-    my $new_contents = $self->engine->process($part_name, $new_doc_part, $vars);
+    my $new_contents = $self->engine->process_part($part_name, $new_doc_part, $vars);
     $new_doc_part->contents($new_contents);
+  }
+
+  # process the property files (core.xml, app.xml. custom.xml -- if present in the original word template)
+  foreach my $property_file ($self->property_files->@*) {
+    if ($self->surgeon->zip->memberNamed($property_file)) {
+      my $new_contents = $self->engine->process($property_file, $vars);
+      $new_doc->xml_member($property_file, $new_contents);
+    }
   }
 
   return $new_doc;
@@ -131,7 +142,7 @@ MsOffice::Word::Template - generate Microsoft Word documents from Word templates
 =head2 Purpose
 
 This module treats a Microsoft Word document as a template for generating other documents. The idea is
-similar to the "mail merge" functionality in Word, but with much richer possibilities, because the
+similar to the "mail merge" functionality in Word, but with much richer possibilities. The
 whole power of a Perl templating engine can be exploited, for example for
 
 =over
@@ -144,10 +155,14 @@ dealing with complex, nested datastructures
 
 using control directives for loops, conditionals, subroutines, etc.
 
+=item *
+
+defining custom data processing functions or macros
+
 =back
 
 
-Template authors just use the highlighing function in MsWord to
+Template authors just use basic highlighing in MsWord to
 mark the templating directives :
 
 =over
@@ -175,17 +190,18 @@ other engines can be specified as subclasses -- see the L</TEMPLATE ENGINE> sect
 
 =head2 Status
 
-This second release is a major refactoring of the first version, together with
-a refactoring of L<MsOffice::Word::Surgeon>. New features include support
-for headers and footers and for image insertion. The internal object-oriented
-structure has been redesigned.
+This distribution is a major refactoring
+of the first version, together with a refactoring of
+L<MsOffice::Word::Surgeon>. New features include support for headers
+and footers, for metadata and for image insertion. The internal
+object-oriented structure has been redesigned.
 
-This module has been used successfully for a pilot project in my organization,
-generating quite complex documents from deeply nested datastructures.
-Yet this has not been used yet at large scale in production, so it is quite likely
-that some youth defects may still be discovered.
-If you use this module, please keep me
-informed of your difficulties, tricks, suggestions, etc.
+This module has been used successfully for a pilot project in my
+organization, generating quite complex documents from deeply nested
+datastructures.  However it has not been used yet at large scale in
+production, so it is quite likely that some youth defects may still be
+discovered.  If you use this module, please keep me informed of your
+difficulties, tricks, suggestions, etc.
 
 
 =head1 METHODS
@@ -224,6 +240,20 @@ the Word highlight color for marking data directives (default : yellow)
 the Word highlight color for marking control directives (default : green).
 Such directives should produce no content. They are treated outside of the regular text flow.
 
+=item part_names
+
+an arrayref to the list of package parts to be processed as templates within the C<.docx>
+ZIP archive. The default list is the main document (C<document.xml>), together with all
+headers and footers found in the ZIP archive.
+
+=item property_files
+
+an arrayref to the list of property files (i.e. metadata) to be processed as templates within the C<.docx>
+ZIP archive. For historical reasons, MsWord has three different XML files for storing document
+properties : C<core.xml>, C<app.xml> and C<custom.xml> : the default list contains those
+three files. Supply an empty list if you don't want any document property to be processed.
+
+
 =back
 
 In addition to the attributes above, other attributes can be passed to the
@@ -243,6 +273,8 @@ That document can then be saved  using L<MsOffice::Word::Surgeon/save_as>.
 
 
 =head1 AUTHORING TEMPLATES
+
+=head2 Textual content
 
 A template is just a regular Word document, in which the highlighted
 fragments represent templating directives.
@@ -269,13 +301,62 @@ outside of the regular XML flow (paragraph nodes, run nodes and text
 nodes), and therefore MsWord would generate an error when trying to
 open such content. There is a workaround, however : data directives
 within a green zone will work if they I<also generate the appropriate markup>
-for paragraph nodes, run nodes and text nodes; but in that case you must
-also apply the "none" filter from L<Template::AutoFilter> so that
-angle brackets in XML markup do not get translated into HTML entities.
+for paragraph nodes, run nodes and text nodes.
 
 See also L<MsOffice::Word::Template::Engine::TT2> for
 additional advice on authoring templates based on the
 L<Template Toolkit|Template>.
+
+
+=head2 Images
+
+Insertion of generated images such as barcodes is done in two steps:
+
+=over
+
+=item *
+
+the template must contain a I<placeholder image> : this is an arbitrary image,
+positioned within the document through usual MsWord commands, including alignment
+instructions, border, etc. That image must be given an I<alternative text> -- see
+L<https://support.microsoft.com/en-us/office/add-alternative-text-to-a-shape-picture-chart-smartart-graphic-or-other-object-44989b2a-903c-4d9a-b742-6a75b451c669|MsOffice documentation>). That text 
+will be used as a unique identifier for the image.
+
+=item *
+
+somewhere in the document (it doesn't matter where), a directive
+must replace the placeholder image by a generated image.
+For example for a barcode, the TT2 directive looks like :
+
+  [[ PROCESS barcode type="QRCode" img="my_image_name" content="some value for the QR code" ]]
+
+See L<MsOffice::Word::Template::Engine::TT2/barcodes> for details. The source
+code can be used as an example of how to implement other image generating blocks.
+
+=back
+
+=head2 Metadata (also known as "document properties" in MsWord parlance)
+
+MsWord documents store metadata, also called "document properties". Each property
+has a name and a value. A number of property names are builtin, like 'author' or 'description';
+other custom properties can be defined. Properties are edited from the MsWord 
+"Backstage view" (the screen displayed after a click on the File tab).
+
+For feeding values into document properties, just use the regular syntax of
+the templating engine. For example with the default Template Toolkit engine,
+directives are enclosed in C<'[% '> and C<' %]'>; so you can write
+
+  [% path.to.subject.data %]
+
+within the 'subject' property of the MsWord template, and the resulting document
+will have its subject filled with the given data path.
+
+Obviously, the reason for this different mechanism is that MsWord has no support
+for highlighting contents in property values.
+
+Unfortunately, this mechanism only works for document properties of type 'string'.
+MsWord would not allow specific templating syntax within fields of type
+boolean, number or date.
 
 
 
@@ -306,16 +387,23 @@ An optional list of parameters that may be used for initializing the engine
 =back
 
 After initialization the engine will receive a C<compile_template> method call for each part in the
-C<.docx> document, i.e. not only the main document body, but also headers and footers.
+C<.docx> package. The default parts to be handled are the main document body (C<document.xml>), and
+all headers and footers. A different list of package parts can be supplied through the
+C<part_names> argument to the constructor.
 
-Then the main C<process()> method, given a datatree in C<$vars>, will call
-the engine's C<process()> method on each document part.
+In addition to the package parts, templates are also compiled for the I<property> files that contain
+metadata such as author name, subject, description, etc. The list of files can be controlled through
+the C<property_files> argument to the constructor.
 
-The engine must make sure that ampersand characters and angle brackets
-are automatically replaced by the corresponding HTML entities
-(otherwise the resulting XML would be incorrect and could not be
-opened by Microsoft Word).  The Mustache engine does this
-automatically.  The Template Toolkit would normally require to
+
+When processing templates, the engine must make sure that ampersand
+characters and angle brackets are automatically replaced by the
+corresponding HTML entities (otherwise the resulting XML would be
+incorrect and could not be opened by Microsoft Word).
+The L<Mustache engine|MsOffice::Word::Template::Engine::Mustache> does this
+automatically.
+The L<Template Toolkit engine|MsOffice::Word::Template::Engine::TT2>
+would normally require to
 explicitly add an C<html> filter at each directive :
 
   [% foo.bar | html %]
