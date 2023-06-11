@@ -303,6 +303,10 @@ open such content. There is a workaround, however : data directives
 within a green zone will work if they I<also generate the appropriate markup>
 for paragraph nodes, run nodes and text nodes.
 
+To highlight using LibreOffice, set the Character Highlighting to Export As
+"Highlighting" instead of the default "Shading". See
+L<file:///usr/share/libreoffice/help/en-US/text/shared/optionen/01130200.html?DbPAR=SHARED#bm_id881592499093945|LibreOffice help for MS Office>.
+
 See also L<MsOffice::Word::Template::Engine::TT2> for
 additional advice on authoring templates based on the
 L<Template Toolkit|Template>.
