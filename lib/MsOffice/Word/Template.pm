@@ -305,7 +305,8 @@ for paragraph nodes, run nodes and text nodes.
 
 To highlight using LibreOffice, set the Character Highlighting to Export As
 "Highlighting" instead of the default "Shading". See
-L<https://help.libreoffice.org/7.5/he/text/shared/optionen/01130200.html?&DbPAR=SHARED#bm_id881592499093945|LibreOffice help for MS Office>.
+L<https://help.libreoffice.org/7.5/en-US/text/shared/optionen/01130200.html|LibreOffice help for MS Office>.
+
 
 See also L<MsOffice::Word::Template::Engine::TT2> for
 additional advice on authoring templates based on the
