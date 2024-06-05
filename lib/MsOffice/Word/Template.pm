@@ -80,12 +80,10 @@ sub _engine {
  CLASS:
   for my $class ("MsOffice::Word::Template::Engine::$engine_class", $engine_class) {
     eval "require $class; 1"                        or  push @load_errors, $@ and next CLASS;
-    $engine = $class->new($self->engine_args->@*)                             and last CLASS;
+    $engine = $class->new(word_template => $self,
+                          $self->engine_args->@*)                             and last CLASS;
   }
   $engine or die "could not load engine class '$engine_class'", @load_errors;
-
-  # prepare the engine by precompiling an inner template for each package part and each property file
-  $engine->_compile_templates($self);
 
   return $engine;
 }
@@ -399,7 +397,6 @@ C<part_names> argument to the constructor.
 In addition to the package parts, templates are also compiled for the I<property> files that contain
 metadata such as author name, subject, description, etc. The list of files can be controlled through
 the C<property_files> argument to the constructor.
-
 
 When processing templates, the engine must make sure that ampersand
 characters and angle brackets are automatically replaced by the

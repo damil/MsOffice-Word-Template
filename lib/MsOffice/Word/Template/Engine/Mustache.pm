@@ -42,7 +42,7 @@ sub process_part {
 sub process {
   my ($self, $template_name, $vars) = @_;
 
-  my $tmpl         = $self->{_compiled_template}{$template_name}
+  my $tmpl         = $self->compiled_template->{$template_name}
     or die "don't have a compiled template for '$template_name'";
 
   my $new_contents = $tmpl->render($vars);
