@@ -4,7 +4,7 @@ use Moose;
 extends 'MsOffice::Word::Template::Engine';
 
 use Template::AutoFilter;  # a subclass of Template that adds automatic html filtering
-require Template::Config;  # loaded explicitly so that we can override its $PROVIDER global variable
+use Template::Config;      # loaded explicitly so that we can override its $PROVIDER global variable
 use MsOffice::Word::Surgeon::Utils qw(encode_entities);
 use MsOffice::Word::Template::Engine::TT2::Provider;
 
@@ -145,7 +145,8 @@ sub _precompiled_blocks {
       my $content = $stash->get('content');
       my $tooltip = $stash->get('tooltip');
       if ($tooltip) {
-        $tooltip = sprintf qq{ w:tooltip="%s"}, encode_entities($tooltip, '<>&"');
+        encode_entities($tooltip);
+        $tooltip = qq{ w:tooltip="$tooltip"};
       }
       my $xml  = qq{<w:hyperlink w:anchor="$name"$tooltip>$content</w:hyperlink>};
 

@@ -176,7 +176,8 @@ sub _template_fragment_for_run { # given an instance of Surgeon::Run, build a te
       $xml .= "<w:t>";                                                # opening XML tag for text node
       $xml .= $self->start_tag;                                       # start a template directive
       foreach my $inner_text (@$inner_texts) {                        # loop over text nodes
-        my $txt = decode_entities($inner_text->literal_text);         # just take inner literal text
+        my $txt = $inner_text->literal_text;                          # just take inner literal text
+        decode_entities($txt);
         $xml .= $txt . "\n";
         # NOTE : adding "\n" because the template parser may need them for identifying end of comments
       }
