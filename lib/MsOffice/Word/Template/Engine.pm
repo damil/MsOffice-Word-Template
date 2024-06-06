@@ -6,7 +6,7 @@ use MsOffice::Word::Surgeon::Utils qw(decode_entities);
 
 use namespace::clean -except => 'meta';
 
-our $VERSION = '2.0';
+our $VERSION = '2.01';
 
 #======================================================================
 # ATTRIBUTES

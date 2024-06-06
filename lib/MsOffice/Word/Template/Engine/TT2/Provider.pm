@@ -3,6 +3,8 @@ use strict;
 use warnings;
 use base 'Template::Provider';
 
+our $VERSION = '2.01';
+
 
 sub _template_content {
   my ($self, $path) = @_;

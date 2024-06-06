@@ -10,7 +10,7 @@ use MsOffice::Word::Template::Engine::TT2::Provider;
 
 use namespace::clean -except => 'meta';
 
-our $VERSION = '2.0';
+our $VERSION = '2.01';
 
 #======================================================================
 # ATTRIBUTES

@@ -1,8 +1,9 @@
 Revision history for MsOffice-Word-Template
 
 
-2.01    05.06.2024
+2.01    06.06.2024
   - support for inserting fragments from other .docx files
+  - tests for barcode generation
   - refactoring : methods moved to the back-end class 'Engine'
   - doc: highlighting help for LibreOffice users
 

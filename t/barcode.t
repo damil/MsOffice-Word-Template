@@ -40,7 +40,7 @@ my $xml = $new_doc->contents;
 
 
 # the only thing that can be tested automatically
-like $xml, qr[\Q11.22.334455.66778899\E}, "dotted_barcode";
+like $xml, qr[\Q11.22.334455.66778899\E], "dotted_barcode";
 
 
 # barcode and qr-code can only be tested visually by opening the .docx in MsWord
