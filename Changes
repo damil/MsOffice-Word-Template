@@ -1,6 +1,9 @@
 Revision history for MsOffice-Word-Template
 
 
+2.02    06.06.2024
+  - fix MANIFEST forgot one module in v2.01
+
 2.01    06.06.2024
   - support for inserting fragments from other .docx files
   - tests for barcode generation
