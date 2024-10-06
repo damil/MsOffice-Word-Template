@@ -160,7 +160,7 @@ defining custom data processing functions or macros
 =back
 
 
-Template authors just use basic highlighing in MsWord to
+Template authors just use basic highlighting in MsWord to
 mark the templating directives :
 
 =over
